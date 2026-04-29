@@ -1,0 +1,42 @@
+server:
+  port: 8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+spring:
+  application:
+    name: es-sync-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+        namespace: ${NACOS_NAMESPACE:}
+      config:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        file-extension: yaml
+        enabled: false
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:43306}/${MYSQL_DB:customer_db}?useSSL=false&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+rocketmq:
+  name-server: ${ROCKETMQ_HOST:localhost}:${ROCKETMQ_PORT:9876}
+  consumer:
+    group: es_sync_consumer_group
+    topic: customer_sync_topic
+
+elasticsearch:
+  host: ${ES_HOST:localhost}
+  port: ${ES_PORT:49200}
+  index: ${ES_INDEX:customer_index}
+
+logging:
+  pattern:
+    console: "[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%thread] [%-5level] [%logger{36}] %msg%n"

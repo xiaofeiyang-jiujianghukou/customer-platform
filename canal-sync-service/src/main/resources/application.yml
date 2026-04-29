@@ -1,0 +1,50 @@
+server:
+  port: 0
+
+management:
+  server:
+    port: 8082
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+spring:
+  application:
+    name: canal-sync-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+        namespace: ${NACOS_NAMESPACE:}
+      config:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+        namespace: ${NACOS_NAMESPACE:}
+        file-extension: yaml
+        enabled: false
+
+rocketmq:
+  name-server: ${ROCKETMQ_HOST:localhost}:${ROCKETMQ_PORT:9876}
+  producer:
+    group: canal_sync_producer_group
+    send-message-timeout: 3000
+    retry-times-when-send-failed: 3
+
+canal:
+  host: ${CANAL_HOST:localhost}
+  port: ${CANAL_PORT:11111}
+  destination: ${CANAL_DESTINATION:example}
+  username: ${CANAL_USERNAME:}
+  password: ${CANAL_PASSWORD:}
+  subscribe: "${CANAL_SUBSCRIBE:.*\\..*}"
+  batch-size: ${CANAL_BATCH_SIZE:1000}
+
+sync:
+  batch:
+    size: ${SYNC_BATCH_SIZE:162}
+    interval-ms: ${SYNC_BATCH_INTERVAL_MS:1000}
+    dedup-window-ms: ${SYNC_BATCH_INTERVAL_MS:1000}
+
+logging:
+  pattern:
+    console: "[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%thread] [%-5level] [%logger{36}] %msg%n"

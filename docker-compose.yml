@@ -1,0 +1,278 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # 1. Nacos 注册中心/配置中心
+  # ============================================================
+  nacos:
+    image: crpi-27zlqugq2208c0pz.cn-hangzhou.personal.cr.aliyuncs.com/xiaofeiyang930112/nacos-server:v2.2.3
+    container_name: nacos
+    environment:
+      - MODE=standalone
+      - PREFER_HOST_MODE=hostname
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    volumes:
+      - nacos_data:/home/nacos/data
+    networks:
+      - customer-platform
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8848/nacos/v1/console/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ============================================================
+  # 2. MySQL 主数据库
+  # ============================================================
+  mysql:
+    image: crpi-27zlqugq2208c0pz.cn-hangzhou.personal.cr.aliyuncs.com/xiaofeiyang930112/mysql:8.0
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: customer_db
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - "43306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --server-id=1
+      - --expire_logs_days=7
+    networks:
+      - customer-platform
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$$MYSQL_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  # ============================================================
+  # 3. Elasticsearch 搜索引擎
+  # ============================================================
+  elasticsearch:
+    image: crpi-27zlqugq2208c0pz.cn-hangzhou.personal.cr.aliyuncs.com/xiaofeiyang930112/elasticsearch:9.0.2
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - network.host=0.0.0.0
+    ports:
+      - "49200:9200"
+      - "9300:9300"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - customer-platform
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # ============================================================
+  # 4. RocketMQ NameServer
+  # ============================================================
+  rocketmq-namesrv:
+    image: crpi-27zlqugq2208c0pz.cn-hangzhou.personal.cr.aliyuncs.com/xiaofeiyang930112/rocketmq:4.9.4
+    container_name: rocketmq-namesrv
+    command: sh mqnamesrv
+    ports:
+      - "9876:9876"
+    networks:
+      - customer-platform
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f NamesrvStartup || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # ============================================================
+  # 5. RocketMQ Broker
+  # ============================================================
+  rocketmq-broker:
+    image: crpi-27zlqugq2208c0pz.cn-hangzhou.personal.cr.aliyuncs.com/xiaofeiyang930112/rocketmq:4.9.4
+    container_name: rocketmq-broker
+    command: sh mqbroker -n rocketmq-namesrv:9876 autoCreateTopicEnable=true autoCreateSubscriptionGroup=true
+    ports:
+      - "10911:10911"
+      - "10909:10909"
+    environment:
+      - NAMESRV_ADDR=rocketmq-namesrv:9876
+    networks:
+      - customer-platform
+    depends_on:
+      rocketmq-namesrv:
+        condition: service_healthy
+
+  # ============================================================
+  # 6. Canal Server
+  # ============================================================
+  canal-server:
+    image: crpi-27zlqugq2208c0pz.cn-hangzhou.personal.cr.aliyuncs.com/xiaofeiyang930112/canal-server:v1.1.8
+    container_name: canal-server
+    ports:
+      - "11111:11111"
+      - "11110:11110"
+      - "11112:11112"
+    environment:
+      - canal.destinations=example
+      - canal.instance.master.address=mysql:3306
+      - canal.instance.dbUsername=canal
+      - canal.instance.dbPassword=canal
+      - canal.instance.filter.regex=.*\\..*
+      - canal.instance.connectionCharset=UTF-8
+    volumes:
+      - ./canal/conf/instance.properties:/home/admin/canal-server/conf/example/instance.properties
+    networks:
+      - customer-platform
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  # ============================================================
+  # 7. Canal 同步服务
+  # ============================================================
+  canal-sync-service:
+    build:
+      context: ./canal-sync-service
+      dockerfile: Dockerfile
+    container_name: canal-sync-service
+    ports:
+      - "8082:8082"
+    environment:
+      - NACOS_HOST=${NACOS_HOST}
+      - NACOS_PORT=${NACOS_PORT}
+      - CANAL_HOST=${CANAL_HOST}
+      - CANAL_PORT=${CANAL_PORT}
+      - CANAL_DESTINATION=${CANAL_DESTINATION}
+      - CANAL_USERNAME=${CANAL_USERNAME}
+      - CANAL_PASSWORD=${CANAL_PASSWORD}
+      - ROCKETMQ_HOST=${ROCKETMQ_HOST}
+      - ROCKETMQ_PORT=${ROCKETMQ_PORT}
+    networks:
+      - customer-platform
+    depends_on:
+      nacos:
+        condition: service_healthy
+      canal-server:
+        condition: service_started
+      rocketmq-namesrv:
+        condition: service_healthy
+
+  # ============================================================
+  # 8. ES 同步服务
+  # ============================================================
+  es-sync-service:
+    build:
+      context: ./es-sync-service
+      dockerfile: Dockerfile
+    container_name: es-sync-service
+    ports:
+      - "8083:8083"
+    environment:
+      - NACOS_HOST=${NACOS_HOST}
+      - NACOS_PORT=${NACOS_PORT}
+      - ROCKETMQ_HOST=${ROCKETMQ_HOST}
+      - ROCKETMQ_PORT=${ROCKETMQ_PORT}
+      - ES_HOST=${ES_HOST}
+      - ES_PORT=${ES_PORT}
+      - ES_INDEX=${ES_INDEX}
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT}
+      - MYSQL_USERNAME=${MYSQL_USERNAME}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DB=${MYSQL_DB}
+    networks:
+      - customer-platform
+    depends_on:
+      nacos:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      rocketmq-namesrv:
+        condition: service_healthy
+
+  # ============================================================
+  # 9. 客户服务
+  # ============================================================
+  customer-service:
+    build:
+      context: ./customer-service
+      dockerfile: Dockerfile
+    container_name: customer-service
+    ports:
+      - "8081:8081"
+    environment:
+      - NACOS_HOST=${NACOS_HOST}
+      - NACOS_PORT=${NACOS_PORT}
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT}
+      - MYSQL_USERNAME=${MYSQL_USERNAME}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DB=${MYSQL_DB}
+    networks:
+      - customer-platform
+    depends_on:
+      nacos:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      es-sync-service:
+        condition: service_started
+
+  # ============================================================
+  # 10. 客户前端
+  # ============================================================
+  customer-frontend:
+    build:
+      context: ./customer-frontend
+      dockerfile: Dockerfile
+    container_name: customer-frontend
+    ports:
+      - "3000:80"
+    networks:
+      - customer-platform
+    depends_on:
+      customer-service:
+        condition: service_started
+
+# ============================================================
+# 持久化卷
+# ============================================================
+volumes:
+  nacos_data:
+  mysql_data:
+  es_data:
+
+# ============================================================
+# 自定义网络
+# ============================================================
+networks:
+  customer-platform:
+    driver: bridge
+    name: customer-platform
